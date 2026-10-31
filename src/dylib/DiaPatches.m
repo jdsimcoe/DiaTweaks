@@ -96,10 +96,14 @@ static NSRect DPLaidOutFrame(NSView *view) {
     return view.frame;
 }
 
+static BOOL DPAssigning;
+
 static void DPAssignFrame(NSView *view, NSRect laidOut, NSRect frame) {
     objc_setAssociatedObject(view, &DPRequestedFrameKey, [NSValue valueWithRect:laidOut], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(view, &DPAssignedFrameKey, [NSValue valueWithRect:frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    DPAssigning = YES;
     view.frame = frame;
+    DPAssigning = NO;
 }
 
 #pragma mark - Toolbar buttons
@@ -512,9 +516,20 @@ static void DPSetRevealed(NSView *pane, BOOL revealed) {
 
 @implementation DPToolbarRevealer
 
+// The bars stacked under the toolbar, like the new tab page's bookmarks bar, move up into its place once it's
+// hidden, and bringing it back would cover them.
+static BOOL DPBarSpaceTaken(NSView *pane, NSView *bar) {
+    for (NSView *sub in pane.subviews) {
+        if (sub == bar || sub.hidden || NSHeight(sub.frame) < 1) continue;
+        CGFloat top = pane.isFlipped ? NSMinY(sub.frame) : NSHeight(pane.bounds) - NSMaxY(sub.frame);
+        if (top < NSHeight(bar.frame) - 0.5 && top + NSHeight(sub.frame) <= NSHeight(bar.frame) + 0.5) return YES;
+    }
+    return NO;
+}
+
 - (BOOL)wanted {
     NSView *pane = self.pane, *bar = DPPaneToolbar(pane);
-    if (!bar || !DPOn[DPHideToolbar] || !DPOn[DPRevealToolbar] || !pane.window.isKeyWindow) return NO;
+    if (!bar || !DPOn[DPHideToolbar] || !DPOn[DPRevealToolbar] || !pane.window.isKeyWindow || DPBarSpaceTaken(pane, bar)) return NO;
     NSResponder *responder = pane.window.firstResponder;
     if ([responder isKindOfClass:NSView.class] && [(NSView *)responder isDescendantOf:bar]) return YES;
     NSPoint point = [pane convertPoint:pane.window.mouseLocationOutsideOfEventStream fromView:nil];
@@ -573,6 +588,15 @@ static void DPApplyReveal(NSView *pane) {
     else if (!behind && lowest == bar) [pane addSubview:bar positioned:NSWindowAbove relativeTo:nil];
 }
 
+// Dia can lay a view out at exactly the frame it was last given here, e.g. once an info bar above the page
+// closes, which the frame alone can't tell apart from the shifted one and left a blank strip under the bar.
+// Whatever Dia sets is its own layout, so the next pass shifts from it. Asking for that pass from here made
+// window layout loop until AppKit gave up.
+static void DPStacked_setFrame(NSView *self, SEL _cmd, NSRect frame) {
+    if (!DPAssigning) objc_setAssociatedObject(self, &DPAssignedFrameKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    DPCallOriginal(void (*)(id, SEL, NSRect), self, _cmd, frame);
+}
+
 static void DPApplyToolbar(NSView *pane) {
     NSView *bar = DPPaneToolbar(pane);
     if (!bar) return;
@@ -599,6 +623,7 @@ static void DPApplyToolbar(NSView *pane) {
         if (reachesBottom) frame.size.height += shift;
         if (flipped) frame.origin.y -= shift;
         else if (!reachesBottom) frame.origin.y += shift;
+        if (view.class != NSView.class) DPHook(view.class, @selector(setFrame:), (IMP)DPStacked_setFrame);
         DPAssignFrame(view, laidOut, frame);
         // Dia sizes the web view once instead of autoresizing it.
         for (NSView *child in view.subviews) {
