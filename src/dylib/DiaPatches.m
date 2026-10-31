@@ -4,11 +4,11 @@
 
 typedef NS_ENUM(NSInteger, DPTweak) {
     DPEdgeToEdge, DPHideToolbar, DPSquareSidebarCorners, DPAnimatedCount,
-    DPHideChatButton = DPAnimatedCount, DPHideSidebarButton, DPHideChatsButton, DPHideRecentTabsButton, DPTweakCount
+    DPHideChatButton = DPAnimatedCount, DPHideSidebarButton, DPHideChatsButton, DPHideRecentTabsButton, DPHideUpgradeBanner, DPTweakCount
 };
 
-static NSString *const DPKeys[DPTweakCount] = {@"edgeToEdge", @"hideToolbar", @"squareSidebarCorners", @"hideChatButton", @"hideSidebarButton", @"hideChatsButton", @"hideRecentTabsButton"};
-static const BOOL DPDefaultsOn[DPTweakCount] = {YES, NO, YES, NO, NO, NO, NO};
+static NSString *const DPKeys[DPTweakCount] = {@"edgeToEdge", @"hideToolbar", @"squareSidebarCorners", @"hideChatButton", @"hideSidebarButton", @"hideChatsButton", @"hideRecentTabsButton", @"hideUpgradeBanner"};
+static const BOOL DPDefaultsOn[DPTweakCount] = {YES, NO, YES, NO, NO, NO, NO, NO};
 static const CGFloat DPWindowPadding = 6;
 static const CFTimeInterval DPAnimationDuration = 0.25;
 
@@ -96,6 +96,7 @@ static NSInteger DPButtonTweak(NSView *view) {
                     : [label isEqualToString:@"Recent tabs"]                       ? DPHideRecentTabsButton
                     : DPIsKind(view, @"_TtC10DiaLibrary17LibraryButtonView")       ? DPHideChatsButton
                     : DPIsKind(view, @"_TtC10TabSidebar15LibraryCellView")         ? DPHideChatsButton
+                    : DPIsKind(view, @"_TtC15BoostCommandBar13ChatUsageView")      ? DPHideUpgradeBanner
                                                                                    : -1;
     if (match >= 0) objc_setAssociatedObject(view, &DPButtonKey, @(match), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return match;
@@ -678,9 +679,10 @@ static NSToolbarItemIdentifier const DPSearchItemIdentifier = @"DiaPatchesSearch
         {DPHideChatButton, @"bubble.fill", @"Hide Chat button", @"Hide the Chat button at the top right of the toolbar."},
         {DPHideChatsButton, @"doc.plaintext", @"Hide Chats button", @"Hide the Chats button in the tab bar or sidebar."},
         {DPHideRecentTabsButton, @"clock.arrow.circlepath", @"Hide recent tabs button", @"Hide the recent tabs button in the tab bar or sidebar."},
+        {DPHideUpgradeBanner, @"sparkles", @"Hide upgrade banner", @"Hide the “Looking for chat?” upgrade banner under the command bar."},
     };
     NSArray<NSColor *> *tints = @[NSColor.systemBlueColor, NSColor.systemIndigoColor, NSColor.systemGrayColor, NSColor.systemOrangeColor,
-                                  NSColor.systemPurpleColor, NSColor.systemTealColor, NSColor.systemPinkColor];
+                                  NSColor.systemPurpleColor, NSColor.systemTealColor, NSColor.systemPinkColor, NSColor.systemYellowColor];
     _searchText = [NSMapTable strongToStrongObjectsMapTable];
     NSMutableArray<NSView *> *tweakRows = [NSMutableArray new];
     NSMutableArray<NSSwitch *> *toggles = [NSMutableArray new];
@@ -1154,7 +1156,9 @@ __attribute__((constructor)) static void DPInit(void) {
         DPHook(DPContainerClass(), NSSelectorFromString(selector), (IMP)DPContainer_layoutOrUpdateLayer);
     DPHook(NSClassFromString(@"_TtC5ARCUI10ShadowView"), @selector(layout), (IMP)DPShadow_layout);
     DPHook(NSClassFromString(@"_TtC11ContentPane15ContentPaneView"), @selector(layout), (IMP)DPPane_layout);
-    for (NSString *bar in @[@"_TtC13NavigationBar17NavigationBarView", @"_TtC10TabSidebar17SidebarHeaderView", @"_TtC10TabSidebar26SidebarContainerFooterView"])
+    // The command bar's upgrade banner is matched as a button itself, so its own layout enforces it.
+    for (NSString *bar in @[@"_TtC13NavigationBar17NavigationBarView", @"_TtC10TabSidebar17SidebarHeaderView", @"_TtC10TabSidebar26SidebarContainerFooterView",
+                            @"_TtC15BoostCommandBar13ChatUsageView"])
         DPHook(NSClassFromString(bar), @selector(layout), (IMP)DPBar_layout);
     DPHook(NSClassFromString(@"_TtC10TabSidebar30SidebarContainerViewController"), @selector(viewDidLayout), (IMP)DPSidebar_viewDidLayout);
     DPHook(NSClassFromString(@"_TtC8TabStrip31TabStripContainerViewController"), @selector(viewWillLayout), (IMP)DPTabStrip_viewWillLayout);
