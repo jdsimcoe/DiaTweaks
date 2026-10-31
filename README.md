@@ -1,51 +1,110 @@
 # DiaTweaks
 
-Small tweaks for the [Dia](https://www.diabrowser.com) browser, kept in place when Dia updates. Turn them on and off in **Dia → Settings → Patches**:
-
-- Edge-to-edge web content
-- Square corners by the sidebar
-- Compact sidebar header
-- Hide toolbar
-- Hide sidebar button
-- Hide Chat button
-- Hide Chats button
-- Hide recent tabs button
-- Compact command bar
+Small tweaks for [Dia](https://www.diabrowser.com) that stay in place when Dia updates.
 
 Unofficial and not affiliated with The Browser Company. Apple Silicon, macOS 14 or later.
 
+## Tweaks
+
+Each tweak changes one part of how Dia looks, like the padding around pages or a button in the toolbar. There's also a command, **Group Tabs by Domain**, that groups tabs by site.
+
+Turn tweaks on and off in **Dia → Settings → Patches**, or with the `diatweaks` command.
+
+[See all tweaks →](https://github.com/JaceThings/DiaTweaks/wiki)
+
 ## Install
 
-1. Install Dia into Applications, if it isn't there already.
+1. Put Dia in your Applications folder.
 2. Install Apple's developer tools: `xcode-select --install`
-3. Run:
+3. Paste this into Terminal:
 
    ```sh
-   git clone https://github.com/JaceThings/DiaTweaks.git
-   cd DiaTweaks
-   ./install.sh
+   git clone https://github.com/JaceThings/DiaTweaks.git ~/DiaTweaks && ~/DiaTweaks/install.sh
    ```
 
-Dia quits and reopens. When macOS asks to access "Dia Safe Storage", enter your password and click **Always Allow**.
+Dia quits and reopens. If macOS asks about "Dia Safe Storage", enter your password and click **Always Allow**.
 
-## How it works
+## The `diatweaks` command
 
-- Everything is built on your Mac from this source. The only download is Dia itself, from The Browser Company's own update feed, and it's used only if it's signed by The Browser Company and passes Gatekeeper.
-- An untouched copy of the official Dia is kept in `~/Library/Application Support/DiaPatches/pristine`. Restoring puts it back.
-- The patched Dia gets one extra line that loads the add-on, its built-in updater is switched off (DiaTweaks updates it instead, keeping the patches), and it's re-signed with a certificate created on your Mac, in your login keychain, called "DiaPatches Local Signing". Nothing is signed with anyone else's certificate.
-- The add-on only rearranges Dia's own interface. It doesn't read your pages, history or passwords, and its only network use is checking Dia's update feed.
-- Nothing runs in the background. Updates are checked when Dia opens and installed when you quit it.
-- Because the app is now signed by you, macOS asks once per Dia update before Dia can read "Dia Safe Storage". Dia's built-in passkey support is off, since only The Browser Company can sign for it; signing in with a password works.
+Run `diatweaks` on its own for a menu, or:
+
+| Command | Does |
+|---|---|
+| `diatweaks list` | Shows every tweak and whether it's on |
+| `diatweaks enable hideToolbar` | Turns a tweak on; Dia changes straight away |
+| `diatweaks disable hideToolbar` | Turns a tweak off |
+| `diatweaks status` | Shows Dia's version, safe mode and which tweaks are on |
+| `diatweaks update` | Gets the latest DiaTweaks and patches Dia again |
+| `diatweaks update-dia` | Downloads a newer Dia and patches it |
+| `diatweaks restore` | Puts the original Dia back |
+
+Tweak names work as keys or titles, like `hideToolbar` or `"Hide toolbar"`. Add `-y` to skip the questions.
+
+## Updating
+
+- **Dia:** Dia's own updater is switched off. DiaTweaks checks for new Dia versions when Dia opens and installs them, patched, when you quit it. `diatweaks update-dia` does it right away.
+- **DiaTweaks:** run `diatweaks update`.
+
+<details>
+<summary>Installed before <code>diatweaks</code> existed?</summary>
+
+Update once by hand, then use `diatweaks update` from then on:
+
+```sh
+rm -rf /tmp/DiaTweaks && git clone --depth 1 https://github.com/JaceThings/DiaTweaks.git /tmp/DiaTweaks && /tmp/DiaTweaks/install.sh
+```
+
+</details>
+
+## FAQ
+
+<details>
+<summary><strong>Is it safe?</strong></summary>
+
+Yes. It's built on your Mac from this code. It only changes how Dia looks, and never reads your pages, history or passwords.
+
+</details>
+
+<details>
+<summary><strong>How does it work?</strong></summary>
+
+It keeps an untouched copy of Dia and makes a second copy that loads a small add-on. The add-on moves and hides parts of Dia while it runs.
+
+</details>
+
+<details>
+<summary><strong>Why does my Mac ask about "Dia Safe Storage"?</strong></summary>
+
+The tweaked Dia is signed by you instead of The Browser Company, so macOS checks once per Dia update. Click **Always Allow**.
+
+</details>
+
+<details>
+<summary><strong>Does it run in the background?</strong></summary>
+
+No. It only does anything while Dia is open.
+
+</details>
+
+<details>
+<summary><strong>Does anything stop working?</strong></summary>
+
+Passkeys. Signing in with a password still works.
+
+</details>
+
+<details>
+<summary><strong>What if Dia keeps crashing?</strong></summary>
+
+If Dia crashes twice in a row right after opening, it opens next time with the tweaks off. **Settings → Patches** has a button to turn them back on.
+
+</details>
 
 ## Uninstall
 
 In Dia, open **Settings → Patches** and click **Restore…**. Dia reopens as the original app with its own updates.
 
-Or from Terminal:
-
-```sh
-~/Library/Application\ Support/DiaPatches/bin/diapatch uninstall --relaunch --purge
-```
+To also delete DiaTweaks' files and the `diatweaks` command, run `diatweaks restore --purge` instead.
 
 ## Keeping a fork up to date
 
@@ -59,13 +118,13 @@ Pull in upstream changes, then rebuild:
 
 ```sh
 git fetch upstream
-git switch main && git rebase upstream/main && git push --force-with-lease
+git switch main && git merge upstream/main && git push
 git switch my-tweak && git rebase upstream/main && git push --force-with-lease
 ./install.sh
 ```
 
-Keep each tweak on its own branch, based on `upstream/main`, so it can go upstream as its own PR. `./install.sh` builds whatever is checked out, so merge each finished tweak into `main` and install from `main` to run them all.
+Keep each tweak on its own branch, based on `upstream/main`, so it can go upstream as its own PR. `./install.sh` builds whatever is checked out, so merge each finished tweak into `main` and install from `main` to run them all. `diatweaks update` installs the original repo's code, so update this fork with `./install.sh` instead.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). PRs need a screenshot or screen recording of the change.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
