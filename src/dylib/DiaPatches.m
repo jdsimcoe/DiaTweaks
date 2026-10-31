@@ -4,15 +4,16 @@
 
 typedef NS_ENUM(NSInteger, DPTweak) {
     DPEdgeToEdge, DPHideToolbar, DPSquareSidebarCorners, DPAnimatedCount,
-    DPHideChatButton = DPAnimatedCount, DPHideSidebarButton, DPHideChatsButton, DPHideRecentTabsButton, DPHideUpgradeBanner, DPRevealToolbar, DPTweakCount
+    DPHideChatButton = DPAnimatedCount, DPHideSidebarButton, DPHideChatsButton, DPHideRecentTabsButton, DPHideUpgradeBanner, DPRevealToolbar, DPCompactSidebarHeader, DPTweakCount
 };
 
-static NSString *const DPKeys[DPTweakCount] = {@"edgeToEdge", @"hideToolbar", @"squareSidebarCorners", @"hideChatButton", @"hideSidebarButton", @"hideChatsButton", @"hideRecentTabsButton", @"hideUpgradeBanner", @"revealToolbarOnHover"};
-static const BOOL DPDefaultsOn[DPTweakCount] = {YES, NO, YES, NO, NO, NO, NO, NO, YES};
+static NSString *const DPKeys[DPTweakCount] = {@"edgeToEdge", @"hideToolbar", @"squareSidebarCorners", @"hideChatButton", @"hideSidebarButton", @"hideChatsButton", @"hideRecentTabsButton", @"hideUpgradeBanner", @"revealToolbarOnHover", @"compactSidebarHeader"};
+static const BOOL DPDefaultsOn[DPTweakCount] = {YES, NO, YES, NO, NO, NO, NO, NO, YES, NO};
 static const CGFloat DPWindowPadding = 6;
 static const CFTimeInterval DPAnimationDuration = 0.25;
 static const CGFloat DPRevealEdge = 8;
 static const CFTimeInterval DPRevealDelay = 0.4;
+static const CGFloat DPHeaderTrim = 10;
 
 static BOOL DPOn[DPTweakCount];
 static CGFloat DPProgress[DPAnimatedCount];
@@ -88,6 +89,19 @@ static IMP DPOriginalIMP(id object, SEL sel) {
 
 #define DPCallOriginal(type, object, sel, ...) ((type)DPOriginalIMP(object, sel))(object, sel, ##__VA_ARGS__)
 
+static NSRect DPLaidOutFrame(NSView *view) {
+    NSValue *assigned = objc_getAssociatedObject(view, &DPAssignedFrameKey);
+    if (assigned && NSEqualRects(assigned.rectValue, view.frame))
+        return [objc_getAssociatedObject(view, &DPRequestedFrameKey) rectValue];
+    return view.frame;
+}
+
+static void DPAssignFrame(NSView *view, NSRect laidOut, NSRect frame) {
+    objc_setAssociatedObject(view, &DPRequestedFrameKey, [NSValue valueWithRect:laidOut], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, &DPAssignedFrameKey, [NSValue valueWithRect:frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    view.frame = frame;
+}
+
 #pragma mark - Toolbar buttons
 
 static BOOL DPIsKind(NSView *view, NSString *className) {
@@ -150,6 +164,23 @@ static void DPBar_layout(NSView *self, SEL _cmd) {
     DPCallOriginal(void (*)(id, SEL), self, _cmd);
 }
 
+// The sidebar header's buttons keep their place and the pinned tabs move up into the empty space under them.
+static void DPCompactHeader(NSView *sidebar) {
+    NSView *header = nil;
+    for (NSView *sub in sidebar.subviews) if (DPIsKind(sub, @"_TtC10TabSidebar17SidebarHeaderView")) header = sub;
+    if (!header) return;
+    NSRect laidOut = DPLaidOutFrame(header), frame = laidOut;
+    if (DPOn[DPCompactSidebarHeader]) frame.size.height = MAX(0, NSHeight(laidOut) - DPHeaderTrim);
+    DPAssignFrame(header, laidOut, frame);
+    // The view under the header keeps its bottom edge, so whatever follows it stays put.
+    for (NSView *sub in sidebar.subviews) {
+        if (sub == header) continue;
+        CGFloat top = NSMinY(sub.frame);
+        if (fabs(top - NSMaxY(laidOut)) > 0.5 && fabs(top - NSMaxY(laidOut) + DPHeaderTrim) > 0.5) continue;
+        sub.frame = NSMakeRect(NSMinX(sub.frame), NSMaxY(frame), NSWidth(sub.frame), NSMaxY(sub.frame) - NSMaxY(frame));
+    }
+}
+
 static void DPRelayoutBars(void) {
     for (NSView *bar in DPBars.allObjects) {
         bar.needsLayout = YES;
@@ -162,6 +193,7 @@ static void DPSidebar_viewDidLayout(NSViewController *self, SEL _cmd) {
     DPCallOriginal(void (*)(id, SEL), self, _cmd);
     NSView *sidebar = self.view, *footer = nil;
     [DPBars addObject:sidebar];
+    if (sidebar.isFlipped) DPCompactHeader(sidebar);
     for (NSView *sub in sidebar.subviews) if (DPIsKind(sub, @"_TtC10TabSidebar26SidebarContainerFooterView")) footer = sub;
     if (!footer || !sidebar.isFlipped) return;
     DPEnforceButtons(footer);
@@ -396,19 +428,6 @@ static void DPShadow_layout(NSView *self, SEL _cmd) {
 }
 
 #pragma mark - Toolbar
-
-static NSRect DPLaidOutFrame(NSView *view) {
-    NSValue *assigned = objc_getAssociatedObject(view, &DPAssignedFrameKey);
-    if (assigned && NSEqualRects(assigned.rectValue, view.frame))
-        return [objc_getAssociatedObject(view, &DPRequestedFrameKey) rectValue];
-    return view.frame;
-}
-
-static void DPAssignFrame(NSView *view, NSRect laidOut, NSRect frame) {
-    objc_setAssociatedObject(view, &DPRequestedFrameKey, [NSValue valueWithRect:laidOut], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(view, &DPAssignedFrameKey, [NSValue valueWithRect:frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    view.frame = frame;
-}
 
 static Class DPToolbarClass(void) {
     static Class cls;
@@ -793,6 +812,7 @@ static NSToolbarItemIdentifier const DPSearchItemIdentifier = @"DiaPatchesSearch
     static const struct { DPTweak tweak; __unsafe_unretained NSString *symbol, *title, *detail; } rows[] = {
         {DPEdgeToEdge, @"squareshape.squareshape.dotted", @"Edge-to-edge web content", @"Remove the padding between web pages and the window edge."},
         {DPSquareSidebarCorners, @"square", @"Square corners by the sidebar", @"Let web pages meet the sidebar with straight edges."},
+        {DPCompactSidebarHeader, @"rectangle.compress.vertical", @"Compact sidebar header", @"Move the pinned tabs up into the empty space under the window buttons."},
         {DPHideToolbar, @"menubar.rectangle", @"Hide toolbar", @"Remove the bar with the address, navigation buttons and extensions. Experimental."},
         {DPRevealToolbar, @"cursorarrow.motionlines", @"Show toolbar on hover", @"Bring the hidden toolbar back while the pointer is at the top of the page."},
         {DPHideSidebarButton, @"sidebar.left", @"Hide sidebar button", @"Hide the sidebar toggle at the top left of the toolbar."},
@@ -801,7 +821,7 @@ static NSToolbarItemIdentifier const DPSearchItemIdentifier = @"DiaPatchesSearch
         {DPHideRecentTabsButton, @"clock.arrow.circlepath", @"Hide recent tabs button", @"Hide the recent tabs button in the tab bar or sidebar."},
         {DPHideUpgradeBanner, @"sparkles", @"Hide upgrade banner", @"Hide the “Looking for chat?” upgrade banner under the command bar."},
     };
-    NSArray<NSColor *> *tints = @[NSColor.systemBlueColor, NSColor.systemIndigoColor, NSColor.systemGrayColor, NSColor.systemGreenColor,
+    NSArray<NSColor *> *tints = @[NSColor.systemBlueColor, NSColor.systemIndigoColor, NSColor.systemMintColor, NSColor.systemGrayColor, NSColor.systemGreenColor,
                                   NSColor.systemOrangeColor, NSColor.systemPurpleColor, NSColor.systemTealColor, NSColor.systemPinkColor,
                                   NSColor.systemYellowColor];
     _searchText = [NSMapTable strongToStrongObjectsMapTable];
