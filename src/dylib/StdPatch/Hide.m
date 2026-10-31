@@ -14,12 +14,32 @@ DPPatch *DPHider(NSView *view) {
     return NULL;
 }
 
+static BOOL DPRestacking;
+static NSMapTable<NSView *, NSStackView *> *DPStacks;
+
+// Some stacks keep a slot for hidden views, which would leave a gap where a hidden button was.
+// A detached view leaves the stack's subviews, so the stack is remembered for reattaching it, and the
+// stack's own hiding and showing while the priority changes passes straight through.
+static void DPDetachFromStack(NSView *view, BOOL detach) {
+    NSStackView *stack = [view.superview isKindOfClass:NSStackView.class] ? (NSStackView *)view.superview : [DPStacks objectForKey:view];
+    if (![stack.views containsObject:view]) return;
+    [DPStacks setObject:stack forKey:view];
+    NSStackViewVisibilityPriority priority = detach ? NSStackViewVisibilityPriorityNotVisible : NSStackViewVisibilityPriorityMustHold;
+    if ([stack visibilityPriorityForView:view] == priority) return;
+    DPRestacking = YES;
+    [stack setVisibilityPriority:priority forView:view];
+    DPRestacking = NO;
+}
+
 // Dia shows and hides these views itself, so a patch keeps saying no while it's on.
 static void DPHidden_setHidden(NSView *self, SEL _cmd, BOOL hidden) {
+    if (DPRestacking) return DPCallOriginal(DPHidden_setHidden, self, hidden);
     DPPatch *patch = DPHider(self);
     BOOL suppress = !hidden && patch && patch->on;
     if (suppress) [DPSuppressed addObject:self];
     else [DPSuppressed removeObject:self];
+    // Reattaching shows the view, so only do it when Dia is showing the button anyway.
+    if (suppress || !hidden) DPDetachFromStack(self, suppress);
     DPCallOriginal(DPHidden_setHidden, self, hidden || suppress);
 }
 
@@ -81,5 +101,6 @@ NSString *DPVerifyHides(DPPatch *patch) {
 void DPInstallHides(void) {
     DPHideHosts = [NSHashTable weakObjectsHashTable];
     DPSuppressed = [NSHashTable weakObjectsHashTable];
+    DPStacks = [NSMapTable weakToWeakObjectsMapTable];
     for (NSUInteger i = 0; i < DPPatchCount; i++) if (DPPatches[i]->hides) return DPInstallHideHosts();
 }
