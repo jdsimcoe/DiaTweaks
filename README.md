@@ -45,6 +45,25 @@ Or from Terminal:
 ~/Library/Application\ Support/DiaPatches/bin/diapatch uninstall --relaunch --purge
 ```
 
+## Keeping a fork up to date
+
+This fork tracks the original repo as `upstream`. Set it up once:
+
+```sh
+git remote add upstream https://github.com/JaceThings/DiaTweaks.git
+```
+
+Pull in upstream changes, then rebuild:
+
+```sh
+git fetch upstream
+git switch main && git rebase upstream/main && git push --force-with-lease
+git switch my-tweak && git rebase upstream/main && git push --force-with-lease
+./install.sh
+```
+
+Keep each tweak on its own branch, based on `upstream/main`, so it can go upstream as its own PR. `./install.sh` builds whatever is checked out, so to run several tweaks at once, install from a branch that has all of them.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). PRs need a screenshot or screen recording of the change.
