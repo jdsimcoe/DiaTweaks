@@ -4,22 +4,23 @@
 
 typedef NS_ENUM(NSInteger, DPTweak) {
     DPEdgeToEdge, DPHideToolbar, DPSquareSidebarCorners, DPAnimatedCount,
-    DPHideChatButton = DPAnimatedCount, DPHideSidebarButton, DPHideChatsButton, DPHideRecentTabsButton, DPHideUpgradeBanner, DPRevealToolbar, DPCompactSidebarHeader, DPTweakCount
+    DPHideChatButton = DPAnimatedCount, DPHideSidebarButton, DPHideChatsButton, DPHideRecentTabsButton, DPHideUpgradeBanner, DPRevealToolbar, DPCompactSidebarHeader, DPCompactCommandBar, DPTweakCount
 };
 
-static NSString *const DPKeys[DPTweakCount] = {@"edgeToEdge", @"hideToolbar", @"squareSidebarCorners", @"hideChatButton", @"hideSidebarButton", @"hideChatsButton", @"hideRecentTabsButton", @"hideUpgradeBanner", @"revealToolbarOnHover", @"compactSidebarHeader"};
-static const BOOL DPDefaultsOn[DPTweakCount] = {YES, NO, YES, NO, NO, NO, NO, NO, YES, NO};
+static NSString *const DPKeys[DPTweakCount] = {@"edgeToEdge", @"hideToolbar", @"squareSidebarCorners", @"hideChatButton", @"hideSidebarButton", @"hideChatsButton", @"hideRecentTabsButton", @"hideUpgradeBanner", @"revealToolbarOnHover", @"compactSidebarHeader", @"compactCommandBar"};
+static const BOOL DPDefaultsOn[DPTweakCount] = {YES, NO, YES, NO, NO, NO, NO, NO, YES, NO, NO};
 static const CGFloat DPWindowPadding = 6;
 static const CFTimeInterval DPAnimationDuration = 0.25;
 static const CGFloat DPRevealEdge = 8;
 static const CFTimeInterval DPRevealDelay = 0.4;
 static const CGFloat DPHeaderTrim = 10;
+static const CGFloat DPCommandBarSpacing = 14;
 
 static BOOL DPOn[DPTweakCount];
 static CGFloat DPProgress[DPAnimatedCount];
 static NSUserDefaults *DPDefaults;
 static NSHashTable<NSView *> *DPContainers, *DPPanes, *DPBars, *DPSuppressed;
-static char DPRequestedFrameKey, DPAssignedFrameKey, DPButtonKey, DPBaseRadiusKey, DPAssignedRadiusKey, DPFillsKey, DPChatKey, DPOriginalPathKey, DPAssignedPathKey, DPCollapsedKey, DPSearchItemKey, DPRevealKey, DPRevealFromKey, DPRevealStartKey, DPRevealTargetKey, DPRevealerKey;
+static char DPRequestedFrameKey, DPAssignedFrameKey, DPButtonKey, DPBaseRadiusKey, DPAssignedRadiusKey, DPFillsKey, DPChatKey, DPOriginalPathKey, DPAssignedPathKey, DPCollapsedKey, DPSearchItemKey, DPRevealKey, DPRevealFromKey, DPRevealStartKey, DPRevealTargetKey, DPRevealerKey, DPCompactedKey;
 
 static NSString *DPCLI(void) {
     return [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject
@@ -69,12 +70,12 @@ static NSNumber *DPSpring(CFTimeInterval start) {
 #pragma mark - Hooks
 
 typedef struct { Class cls; SEL sel; IMP imp; } DPOriginal;
-static DPOriginal DPOriginals[32];
+static DPOriginal DPOriginals[48];
 static int DPOriginalCount;
 
 static void DPHook(Class cls, SEL sel, IMP replacement) {
     Method method = cls ? class_getInstanceMethod(cls, sel) : NULL;
-    if (!method || method_getImplementation(method) == replacement || DPOriginalCount == 32) return;
+    if (!method || method_getImplementation(method) == replacement || DPOriginalCount == 48) return;
     IMP original = method_getImplementation(method);
     if (!class_addMethod(cls, sel, replacement, method_getTypeEncoding(method))) method_setImplementation(method, replacement);
     DPOriginals[DPOriginalCount++] = (DPOriginal){cls, sel, original};
@@ -642,6 +643,88 @@ static void DPPane_layout(NSView *self, SEL _cmd) {
     DPApplyToolbar(self);
 }
 
+#pragma mark - Command bar
+
+// Without chat usage, the command bar's bottom row only holds Go and two buttons that can't be used.
+static BOOL DPChatLocked(NSView *view) {
+    return DPFindView(view, ^BOOL(NSView *v) { return [v.accessibilityLabel hasSuffix:@"only available when you have chat usage"]; }) != nil;
+}
+
+static NSView *DPCommandBarPart(NSView *commandBar, NSString *className) {
+    return DPFindView(commandBar, ^BOOL(NSView *v) { return DPIsKind(v, className); });
+}
+
+static NSView *DPCompactToolbar(NSView *commandBar) {
+    NSView *toolbar = DPCommandBarPart(commandBar, @"_TtC15BoostCommandBar11ToolbarView");
+    return DPOn[DPCompactCommandBar] && toolbar && DPChatLocked(toolbar) ? toolbar : nil;
+}
+
+static NSView *DPGoButton(NSView *toolbar) {
+    NSStackView *stack = toolbar.subviews.firstObject;
+    return [stack isKindOfClass:NSStackView.class] ? stack.views.lastObject : nil;
+}
+
+// The popover sizes itself to the command bar, so it drops the bottom row's height, keeping as much space
+// under the input (or the suggestions) as the input has between it and the suggestions.
+static void DPPopover_setFrameSize(NSView *self, SEL _cmd, NSSize size) {
+    NSView *commandBar = DPCommandBarPart(self, @"_TtC15BoostCommandBar8RootView"), *toolbar = DPCompactToolbar(commandBar);
+    NSView *input = DPCommandBarPart(commandBar, @"_TtC15BoostCommandBar18InputContainerView");
+    NSView *suggestions = DPCommandBarPart(commandBar, @"_TtC15BoostCommandBar15SuggestionsView");
+    if (toolbar && input && suggestions) {
+        CGFloat gap = NSMinY(suggestions.frame) - NSMaxY(input.frame), below = NSMinY(input.frame) - gap;
+        size.height -= MAX(0, NSHeight(toolbar.frame) - below);
+    }
+    DPCallOriginal(void (*)(id, SEL, NSSize), self, _cmd, size);
+}
+
+// Go moves up beside the input, and the row is still full width so it keeps its place at the trailing edge.
+// Dia lets the popover run past the top of the window, so Go is centered in the part of the row that shows.
+static void DPCommandBar_layout(NSView *self, SEL _cmd) {
+    DPCallOriginal(void (*)(id, SEL), self, _cmd);
+    NSView *toolbar = DPCommandBarPart(self, @"_TtC15BoostCommandBar11ToolbarView");
+    NSStackView *stack = toolbar.subviews.firstObject;
+    if (![stack isKindOfClass:NSStackView.class]) return;
+    BOOL compact = DPCompactToolbar(self) != nil;
+    if (!compact && !objc_getAssociatedObject(stack, &DPCompactedKey)) return;
+    objc_setAssociatedObject(stack, &DPCompactedKey, compact ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // Faded rather than hidden: the add tabs button stretches to push Go to the trailing edge.
+    for (NSView *view in stack.views)
+        if (view != DPGoButton(toolbar) && DPChatLocked(view)) view.alphaValue = !compact;
+    NSView *input = DPCommandBarPart(self, @"_TtC15BoostCommandBar18InputContainerView");
+    NSView *suggestions = DPCommandBarPart(self, @"_TtC15BoostCommandBar15SuggestionsView");
+    if (!compact || !input || !suggestions || !self.window) return;
+    CGFloat gap = NSMinY(suggestions.frame) - NSMaxY(input.frame), rowBottom = NSMinY(suggestions.frame) + NSMinY(input.frame) - gap;
+    CGFloat cut = MAX(0, NSMaxY([self convertRect:self.bounds toView:nil]) - NSHeight(self.window.frame));
+    NSRect frame = toolbar.frame;
+    frame.origin.y = (MIN(cut, NSMinY(input.frame)) + rowBottom - NSHeight(frame)) / 2;
+    toolbar.frame = frame;
+}
+
+static void DPPopover_setFrameOrigin(NSView *self, SEL _cmd, NSPoint origin) {
+    DPCallOriginal(void (*)(id, SEL, NSPoint), self, _cmd, origin);
+    NSView *commandBar = DPCommandBarPart(self, @"_TtC15BoostCommandBar8RootView");
+    if (DPCompactToolbar(commandBar)) commandBar.needsLayout = YES;
+}
+
+// The text stops short of Go instead of running under it.
+static void DPCommandBarInput_layout(NSView *self, SEL _cmd) {
+    DPCallOriginal(void (*)(id, SEL), self, _cmd);
+    NSView *toolbar = DPCompactToolbar(self.superview), *go = DPGoButton(toolbar);
+    NSView *text = DPCommandBarPart(self, @"_TtC15BoostCommandBar17TextContainerView");
+    if (!go || !text) return;
+    NSRect frame = text.frame;
+    frame.size.width = MAX(0, NSWidth(self.bounds) - NSMinX(frame) - go.intrinsicContentSize.width - 2 * DPCommandBarSpacing);
+    text.frame = frame;
+}
+
+// The row now lies over the input, so only Go takes clicks.
+static NSView *DPCommandBarToolbar_hitTest(NSView *self, SEL _cmd, NSPoint point) {
+    NSView *hit = DPCallOriginal(NSView *(*)(id, SEL, NSPoint), self, _cmd, point), *go = DPGoButton(self);
+    if (!hit || ![self.superview.superview isKindOfClass:NSClassFromString(@"_TtC15BoostCommandBar8RootView")]
+        || !DPCompactToolbar(self.superview.superview)) return hit;
+    return [hit isDescendantOf:go] ? hit : nil;
+}
+
 #pragma mark - Animation
 
 static void DPRelayout(void) {
@@ -866,10 +949,11 @@ static NSToolbarItemIdentifier const DPSearchItemIdentifier = @"DiaPatchesSearch
         {DPHideChatsButton, @"doc.plaintext", @"Hide Chats button", @"Hide the Chats button in the tab bar or sidebar."},
         {DPHideRecentTabsButton, @"clock.arrow.circlepath", @"Hide recent tabs button", @"Hide the recent tabs button in the tab bar or sidebar."},
         {DPHideUpgradeBanner, @"sparkles", @"Hide upgrade banner", @"Hide the “Looking for chat?” upgrade banner under the command bar."},
+        {DPCompactCommandBar, @"rectangle.and.text.magnifyingglass", @"Compact command bar", @"Fit the command bar on one line when adding tabs, files and dictation need chat usage."},
     };
     NSArray<NSColor *> *tints = @[NSColor.systemBlueColor, NSColor.systemIndigoColor, NSColor.systemMintColor, NSColor.systemGrayColor, NSColor.systemGreenColor,
                                   NSColor.systemOrangeColor, NSColor.systemPurpleColor, NSColor.systemTealColor, NSColor.systemPinkColor,
-                                  NSColor.systemYellowColor];
+                                  NSColor.systemYellowColor, NSColor.systemCyanColor];
     _searchText = [NSMapTable strongToStrongObjectsMapTable];
     NSMutableArray<NSView *> *tweakRows = [NSMutableArray new];
     NSMutableArray<NSSwitch *> *toggles = [NSMutableArray new];
@@ -1353,6 +1437,13 @@ __attribute__((constructor)) static void DPInit(void) {
     DPHook(NSClassFromString(@"_TtC10TabSidebar30SidebarContainerViewController"), @selector(viewDidLayout), (IMP)DPSidebar_viewDidLayout);
     DPHook(NSClassFromString(@"_TtC8TabStrip31TabStripContainerViewController"), @selector(viewWillLayout), (IMP)DPTabStrip_viewWillLayout);
     DPHook(DPToolbarClass(), @selector(hitTest:), (IMP)DPToolbar_hitTest);
+    DPHook(NSClassFromString(@"_TtCC14DynamicPopover28DynamicPopoverViewControllerP33_AB0357A1429F4D6D7F128058B713C93F8RootView"),
+           @selector(setFrameSize:), (IMP)DPPopover_setFrameSize);
+    DPHook(NSClassFromString(@"_TtCC14DynamicPopover28DynamicPopoverViewControllerP33_AB0357A1429F4D6D7F128058B713C93F8RootView"),
+           @selector(setFrameOrigin:), (IMP)DPPopover_setFrameOrigin);
+    DPHook(NSClassFromString(@"_TtC15BoostCommandBar8RootView"), @selector(layout), (IMP)DPCommandBar_layout);
+    DPHook(NSClassFromString(@"_TtC15BoostCommandBar18InputContainerView"), @selector(layout), (IMP)DPCommandBarInput_layout);
+    DPHook(NSClassFromString(@"_TtC15BoostCommandBar11ToolbarView"), @selector(hitTest:), (IMP)DPCommandBarToolbar_hitTest);
     DPHook(NSClassFromString(DPSettingsControllerClass), @selector(viewDidAppear), (IMP)DPSettings_viewDidAppear);
     DPHook(NSClassFromString(DPSettingsControllerClass), @selector(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:), (IMP)DPSettings_toolbarItem);
 

@@ -10,6 +10,7 @@ Small tweaks for the [Dia](https://www.diabrowser.com) browser, kept in place wh
 - Hide Chat button
 - Hide Chats button
 - Hide recent tabs button
+- Compact command bar
 
 Unofficial and not affiliated with The Browser Company. Apple Silicon, macOS 14 or later.
 
