@@ -62,7 +62,7 @@ git switch my-tweak && git rebase upstream/main && git push --force-with-lease
 ./install.sh
 ```
 
-Keep each tweak on its own branch, based on `upstream/main`, so it can go upstream as its own PR. `./install.sh` builds whatever is checked out, so to run several tweaks at once, install from a branch that has all of them.
+Keep each tweak on its own branch, based on `upstream/main`, so it can go upstream as its own PR. `./install.sh` builds whatever is checked out, so merge each finished tweak into `main` and install from `main` to run them all.
 
 ## Contributing
 
