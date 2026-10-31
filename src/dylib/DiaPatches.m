@@ -4,19 +4,21 @@
 
 typedef NS_ENUM(NSInteger, DPTweak) {
     DPEdgeToEdge, DPHideToolbar, DPSquareSidebarCorners, DPAnimatedCount,
-    DPHideChatButton = DPAnimatedCount, DPHideSidebarButton, DPHideChatsButton, DPHideRecentTabsButton, DPTweakCount
+    DPHideChatButton = DPAnimatedCount, DPHideSidebarButton, DPHideChatsButton, DPHideRecentTabsButton, DPRevealToolbar, DPTweakCount
 };
 
-static NSString *const DPKeys[DPTweakCount] = {@"edgeToEdge", @"hideToolbar", @"squareSidebarCorners", @"hideChatButton", @"hideSidebarButton", @"hideChatsButton", @"hideRecentTabsButton"};
-static const BOOL DPDefaultsOn[DPTweakCount] = {YES, NO, YES, NO, NO, NO, NO};
+static NSString *const DPKeys[DPTweakCount] = {@"edgeToEdge", @"hideToolbar", @"squareSidebarCorners", @"hideChatButton", @"hideSidebarButton", @"hideChatsButton", @"hideRecentTabsButton", @"revealToolbarOnHover"};
+static const BOOL DPDefaultsOn[DPTweakCount] = {YES, NO, YES, NO, NO, NO, NO, YES};
 static const CGFloat DPWindowPadding = 6;
 static const CFTimeInterval DPAnimationDuration = 0.25;
+static const CGFloat DPRevealEdge = 8;
+static const CFTimeInterval DPRevealDelay = 0.4;
 
 static BOOL DPOn[DPTweakCount];
 static CGFloat DPProgress[DPAnimatedCount];
 static NSUserDefaults *DPDefaults;
 static NSHashTable<NSView *> *DPContainers, *DPPanes, *DPBars, *DPSuppressed;
-static char DPRequestedFrameKey, DPAssignedFrameKey, DPButtonKey, DPBaseRadiusKey, DPAssignedRadiusKey, DPFillsKey, DPChatKey, DPOriginalPathKey, DPAssignedPathKey, DPCollapsedKey, DPSearchItemKey;
+static char DPRequestedFrameKey, DPAssignedFrameKey, DPButtonKey, DPBaseRadiusKey, DPAssignedRadiusKey, DPFillsKey, DPChatKey, DPOriginalPathKey, DPAssignedPathKey, DPCollapsedKey, DPSearchItemKey, DPRevealKey, DPRevealFromKey, DPRevealStartKey, DPRevealTargetKey, DPRevealerKey;
 
 static NSString *DPCLI(void) {
     return [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject
@@ -55,6 +57,12 @@ static NSView *DPFindView(NSView *root, BOOL (^match)(NSView *)) {
         if (found) return found;
     }
     return nil;
+}
+
+// A critically damped spring from 0 to 1, so every tweak settles the same way; nil once it has settled.
+static NSNumber *DPSpring(CFTimeInterval start) {
+    CGFloat elapsed = CACurrentMediaTime() - start, omega = 22;
+    return elapsed >= DPAnimationDuration * 2 ? nil : @(1 - (1 + omega * elapsed) * exp(-omega * elapsed));
 }
 
 #pragma mark - Hooks
@@ -406,21 +414,131 @@ static Class DPToolbarClass(void) {
     return cls = cls ?: NSClassFromString(@"_TtC13NavigationBar17NavigationBarView");
 }
 
+static NSView *DPPaneToolbar(NSView *pane) {
+    for (NSView *sub in pane.subviews) if ([sub isKindOfClass:DPToolbarClass()]) return sub;
+    return nil;
+}
+
+#pragma mark - Toolbar reveal
+
+// A hidden toolbar fades back in over the page, which keeps its height, while the pointer is at the top of the pane.
+static CGFloat DPReveal(NSView *pane) {
+    return DPOn[DPRevealToolbar] ? [objc_getAssociatedObject(pane, &DPRevealKey) doubleValue] : 0;
+}
+
+static BOOL DPRevealed(NSView *pane) {
+    return DPOn[DPRevealToolbar] && [objc_getAssociatedObject(pane, &DPRevealTargetKey) boolValue];
+}
+
+static void DPApplyReveal(NSView *pane);
+
+static void DPAnimateReveal(void) {
+    static NSTimer *timer;
+    if (timer) return;
+    timer = [NSTimer timerWithTimeInterval:1.0 / 120 repeats:YES block:^(NSTimer *t) {
+        BOOL moving = NO;
+        for (NSView *pane in DPPanes.allObjects) {
+            NSNumber *start = objc_getAssociatedObject(pane, &DPRevealStartKey);
+            if (!start) continue;
+            NSNumber *spring = DPSpring(start.doubleValue);
+            CGFloat from = [objc_getAssociatedObject(pane, &DPRevealFromKey) doubleValue], target = DPRevealed(pane);
+            objc_setAssociatedObject(pane, &DPRevealKey, @(spring ? from + (target - from) * spring.doubleValue : target), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (!spring) objc_setAssociatedObject(pane, &DPRevealStartKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            DPApplyReveal(pane);
+            moving = YES;
+        }
+        if (!moving) {
+            [t invalidate];
+            timer = nil;
+        }
+    }];
+    [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
+}
+
+static void DPSetRevealed(NSView *pane, BOOL revealed) {
+    if (DPRevealed(pane) == revealed) return;
+    // Starts from wherever the bar is, so reversing mid-fade doesn't jump.
+    objc_setAssociatedObject(pane, &DPRevealFromKey, objc_getAssociatedObject(pane, &DPRevealKey), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(pane, &DPRevealStartKey, @(CACurrentMediaTime()), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(pane, &DPRevealTargetKey, @(revealed), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    DPAnimateReveal();
+}
+
+@interface DPToolbarRevealer : NSObject
+@property (nonatomic, weak) NSView *pane;
+@property (nonatomic) BOOL concealing;
+@end
+
+@implementation DPToolbarRevealer
+
+- (BOOL)wanted {
+    NSView *pane = self.pane, *bar = DPPaneToolbar(pane);
+    if (!bar || !DPOn[DPHideToolbar] || !DPOn[DPRevealToolbar] || !pane.window.isKeyWindow) return NO;
+    NSResponder *responder = pane.window.firstResponder;
+    if ([responder isKindOfClass:NSView.class] && [(NSView *)responder isDescendantOf:bar]) return YES;
+    NSPoint point = [pane convertPoint:pane.window.mouseLocationOutsideOfEventStream fromView:nil];
+    CGFloat fromTop = pane.isFlipped ? point.y : NSHeight(pane.bounds) - point.y;
+    if (point.x < 0 || point.x > NSWidth(pane.bounds) || fromTop < 0) return NO;
+    return fromTop <= DPRevealEdge || (DPRevealed(pane) && fromTop <= NSHeight(bar.frame) + DPRevealEdge);
+}
+
+- (void)scheduleConceal {
+    if (self.concealing) return;
+    self.concealing = YES;
+    [self performSelector:@selector(conceal) withObject:nil afterDelay:DPRevealDelay inModes:@[NSRunLoopCommonModes]];
+}
+
+- (void)update {
+    if (self.wanted) DPSetRevealed(self.pane, YES);
+    else if (DPRevealed(self.pane)) [self scheduleConceal];
+}
+
+// Keeps rechecking while the bar is up instead of trusting exit events, which a menu or focus change can swallow.
+- (void)conceal {
+    self.concealing = NO;
+    if (self.wanted) [self scheduleConceal];
+    else DPSetRevealed(self.pane, NO);
+}
+
+- (void)mouseEntered:(NSEvent *)event { [self update]; }
+- (void)mouseMoved:(NSEvent *)event { [self update]; }
+- (void)mouseExited:(NSEvent *)event { [self update]; }
+
+@end
+
+static void DPTrackReveal(NSView *pane) {
+    if (objc_getAssociatedObject(pane, &DPRevealerKey)) return;
+    DPToolbarRevealer *revealer = [DPToolbarRevealer new];
+    revealer.pane = pane;
+    objc_setAssociatedObject(pane, &DPRevealerKey, revealer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSTrackingAreaOptions options = NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect;
+    [pane addTrackingArea:[[NSTrackingArea alloc] initWithRect:NSZeroRect options:options owner:revealer userInfo:nil]];
+}
+
 // The bar stays in Dia's layout: hiding it makes Dia reflow in ways it won't undo.
 static NSView *DPToolbar_hitTest(NSView *self, SEL _cmd, NSPoint point) {
-    return DPOn[DPHideToolbar] ? nil : DPCallOriginal(NSView *(*)(id, SEL, NSPoint), self, _cmd, point);
+    return DPOn[DPHideToolbar] && !DPRevealed(self.superview) ? nil : DPCallOriginal(NSView *(*)(id, SEL, NSPoint), self, _cmd, point);
+}
+
+// Revealing only fades and restacks the bar, so it doesn't need Dia to lay out the pane again.
+static void DPApplyReveal(NSView *pane) {
+    NSView *bar = DPPaneToolbar(pane);
+    if (!bar) return;
+    CGFloat progress = DPProgress[DPHideToolbar], shown = DPReveal(pane);
+    bar.alphaValue = 1 - progress * (1 - shown);
+    BOOL behind = progress > 0 && shown == 0;
+    NSView *lowest = pane.subviews.firstObject;
+    if (behind && lowest != bar) [pane addSubview:bar positioned:NSWindowBelow relativeTo:lowest];
+    else if (!behind && lowest == bar) [pane addSubview:bar positioned:NSWindowAbove relativeTo:nil];
 }
 
 static void DPApplyToolbar(NSView *pane) {
-    NSView *bar = nil;
-    for (NSView *sub in pane.subviews) if ([sub isKindOfClass:DPToolbarClass()]) { bar = sub; break; }
+    NSView *bar = DPPaneToolbar(pane);
     if (!bar) return;
+    DPTrackReveal(pane);
+    DPApplyReveal(pane);
 
     CGFloat progress = DPProgress[DPHideToolbar];
-    bar.alphaValue = 1 - progress;
-    NSView *lowest = pane.subviews.firstObject;
-    if (progress > 0 && lowest != bar) [pane addSubview:bar positioned:NSWindowBelow relativeTo:lowest];
-    else if (progress == 0 && lowest == bar) [pane addSubview:bar positioned:NSWindowAbove relativeTo:nil];
 
     BOOL flipped = pane.isFlipped;
     CGFloat (^top)(NSRect) = ^CGFloat(NSRect r) { return flipped ? NSMinY(r) : NSHeight(pane.bounds) - NSMaxY(r); };
@@ -481,9 +599,9 @@ static void DPAnimate(void) {
     for (int i = 0; i < DPAnimatedCount; i++) from[i] = DPProgress[i];
     if (timer) return;
     timer = [NSTimer timerWithTimeInterval:1.0 / 120 repeats:YES block:^(NSTimer *t) {
-        CGFloat elapsed = CACurrentMediaTime() - start, omega = 22;
-        BOOL done = elapsed >= DPAnimationDuration * 2;
-        CGFloat eased = done ? 1 : 1 - (1 + omega * elapsed) * exp(-omega * elapsed);
+        NSNumber *spring = DPSpring(start);
+        BOOL done = !spring;
+        CGFloat eased = done ? 1 : spring.doubleValue;
         for (int i = 0; i < DPAnimatedCount; i++) DPProgress[i] = from[i] + (DPOn[i] - from[i]) * eased;
         DPRelayout();
         if (done) {
@@ -503,6 +621,7 @@ static void DPSetTweak(DPTweak tweak, BOOL on) {
         if (on) for (NSView *bar in DPBars.allObjects) DPEnforceButtons(bar);
         else DPRestoreButtons(tweak);
         DPRelayoutBars();
+        if (tweak == DPRevealToolbar) DPRelayout();
     }
 }
 
@@ -659,7 +778,7 @@ static NSToolbarItemIdentifier const DPSearchItemIdentifier = @"DiaPatchesSearch
 @property (nonatomic, strong) NSMapTable<NSView *, NSString *> *searchText;
 @property (nonatomic, strong) NSSearchToolbarItem *searchItem;
 @property (nonatomic, strong) NSTextField *noResults, *notice;
-@property (nonatomic, weak) NSView *squareRow;
+@property (nonatomic, weak) NSView *squareRow, *revealRow;
 @property (nonatomic, strong) NSTextField *status;
 @property (nonatomic, strong) NSButton *checkButton;
 @property (nonatomic, strong) NSButton *relaunchButton;
@@ -674,13 +793,14 @@ static NSToolbarItemIdentifier const DPSearchItemIdentifier = @"DiaPatchesSearch
         {DPEdgeToEdge, @"squareshape.squareshape.dotted", @"Edge-to-edge web content", @"Remove the padding between web pages and the window edge."},
         {DPSquareSidebarCorners, @"square", @"Square corners by the sidebar", @"Let web pages meet the sidebar with straight edges."},
         {DPHideToolbar, @"menubar.rectangle", @"Hide toolbar", @"Remove the bar with the address, navigation buttons and extensions. Experimental."},
+        {DPRevealToolbar, @"cursorarrow.motionlines", @"Show toolbar on hover", @"Bring the hidden toolbar back while the pointer is at the top of the page."},
         {DPHideSidebarButton, @"sidebar.left", @"Hide sidebar button", @"Hide the sidebar toggle at the top left of the toolbar."},
         {DPHideChatButton, @"bubble.fill", @"Hide Chat button", @"Hide the Chat button at the top right of the toolbar."},
         {DPHideChatsButton, @"doc.plaintext", @"Hide Chats button", @"Hide the Chats button in the tab bar or sidebar."},
         {DPHideRecentTabsButton, @"clock.arrow.circlepath", @"Hide recent tabs button", @"Hide the recent tabs button in the tab bar or sidebar."},
     };
-    NSArray<NSColor *> *tints = @[NSColor.systemBlueColor, NSColor.systemIndigoColor, NSColor.systemGrayColor, NSColor.systemOrangeColor,
-                                  NSColor.systemPurpleColor, NSColor.systemTealColor, NSColor.systemPinkColor];
+    NSArray<NSColor *> *tints = @[NSColor.systemBlueColor, NSColor.systemIndigoColor, NSColor.systemGrayColor, NSColor.systemGreenColor,
+                                  NSColor.systemOrangeColor, NSColor.systemPurpleColor, NSColor.systemTealColor, NSColor.systemPinkColor];
     _searchText = [NSMapTable strongToStrongObjectsMapTable];
     NSMutableArray<NSView *> *tweakRows = [NSMutableArray new];
     NSMutableArray<NSSwitch *> *toggles = [NSMutableArray new];
@@ -705,6 +825,7 @@ static NSToolbarItemIdentifier const DPSearchItemIdentifier = @"DiaPatchesSearch
         NSView *row = DPRow(leading, toggle);
         [_searchText setObject:[NSString stringWithFormat:@"%@ %@", rows[i].title, rows[i].detail] forKey:row];
         if (rows[i].tweak == DPSquareSidebarCorners) _squareRow = row;
+        if (rows[i].tweak == DPRevealToolbar) _revealRow = row;
         [tweakRows addObject:row];
     }
     _toggles = toggles;
@@ -803,7 +924,8 @@ static NSToolbarItemIdentifier const DPSearchItemIdentifier = @"DiaPatchesSearch
     for (NSArray *section in self.sections) {
         BOOL any = NO;
         for (NSView *row in section[2]) {
-            BOOL visible = (row != self.squareRow || DPOn[DPEdgeToEdge]) && [self matches:row words:words];
+            BOOL visible = (row != self.squareRow || DPOn[DPEdgeToEdge]) && (row != self.revealRow || DPOn[DPHideToolbar])
+                && [self matches:row words:words];
             NSArray<NSView *> *arranged = ((NSStackView *)row.superview).arrangedSubviews;
             NSUInteger index = [arranged indexOfObject:row];
             row.hidden = !visible;
