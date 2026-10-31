@@ -110,11 +110,31 @@ static NSInteger DPButtonTweak(NSView *view) {
     return match;
 }
 
+static BOOL DPRestacking;
+static NSMapTable<NSView *, NSStackView *> *DPStacks;
+
+// Some stacks keep a slot for hidden views, which would leave a gap where a hidden button was.
+// A detached view leaves the stack's subviews, so the stack is remembered for reattaching it, and the
+// stack's own hiding and showing while the priority changes passes straight through.
+static void DPDetachFromStack(NSView *view, BOOL detach) {
+    NSStackView *stack = [view.superview isKindOfClass:NSStackView.class] ? (NSStackView *)view.superview : [DPStacks objectForKey:view];
+    if (![stack.views containsObject:view]) return;
+    [DPStacks setObject:stack forKey:view];
+    NSStackViewVisibilityPriority priority = detach ? NSStackViewVisibilityPriorityNotVisible : NSStackViewVisibilityPriorityMustHold;
+    if ([stack visibilityPriorityForView:view] == priority) return;
+    DPRestacking = YES;
+    [stack setVisibilityPriority:priority forView:view];
+    DPRestacking = NO;
+}
+
 static void DPButton_setHidden(NSView *self, SEL _cmd, BOOL hidden) {
+    if (DPRestacking) return DPCallOriginal(void (*)(id, SEL, BOOL), self, _cmd, hidden);
     NSInteger tweak = DPButtonTweak(self);
     BOOL suppress = !hidden && tweak >= 0 && DPOn[tweak];
     if (suppress) [DPSuppressed addObject:self];
     else [DPSuppressed removeObject:self];
+    // Reattaching shows the view, so only do it when Dia is showing the button anyway.
+    if (suppress || !hidden) DPDetachFromStack(self, suppress);
     DPCallOriginal(void (*)(id, SEL, BOOL), self, _cmd, hidden || suppress);
 }
 
@@ -124,6 +144,7 @@ static void DPEnforceButton(NSView *view) {
     DPHook(view.class, @selector(setHidden:), (IMP)DPButton_setHidden);
     if (!DPOn[tweak] || view.hidden) return;
     [DPSuppressed addObject:view];
+    DPDetachFromStack(view, YES);
     DPCallOriginal(void (*)(id, SEL, BOOL), view, @selector(setHidden:), YES);
 }
 
@@ -1273,6 +1294,7 @@ __attribute__((constructor)) static void DPInit(void) {
     DPPanes = [NSHashTable weakObjectsHashTable];
     DPBars = [NSHashTable weakObjectsHashTable];
     DPSuppressed = [NSHashTable weakObjectsHashTable];
+    DPStacks = [NSMapTable weakToWeakObjectsMapTable];
 
     DPHook(DPContainerClass(), @selector(setFrame:), (IMP)DPContainer_setFrame);
     for (NSString *selector in @[@"layout", @"updateLayer"])
