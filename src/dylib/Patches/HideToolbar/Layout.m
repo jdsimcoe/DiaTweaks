@@ -7,9 +7,22 @@ NSRect DPLaidOutFrame(NSView *view) {
     return [DPDiaValue(view, &DPFrameKey, @(view.frame)) rectValue];
 }
 
+static BOOL DPAssigning;
+
 static void DPAssignFrame(NSView *view, NSRect laidOut, NSRect frame) {
     DPOverride(view, &DPFrameKey, @(laidOut), @(frame));
+    DPAssigning = YES;
     view.frame = frame;
+    DPAssigning = NO;
+}
+
+// Dia can lay a view out at exactly the frame it was last given here, e.g. once an info bar above the page
+// closes, which the frame alone can't tell apart from the shifted one and left a blank strip under the bar.
+// Whatever Dia sets is its own layout, so the next pass shifts from it. Asking for that pass from here made
+// window layout loop until AppKit gave up.
+static void DPStacked_setFrame(NSView *self, SEL _cmd, NSRect frame) {
+    if (!DPAssigning) DPSet(self, &DPFrameKey, nil);
+    DPCallOriginal(DPStacked_setFrame, self, frame);
 }
 
 CGFloat DPTop(NSView *pane, NSRect r) { return pane.isFlipped ? NSMinY(r) : NSHeight(pane.bounds) - NSMaxY(r); }
@@ -60,6 +73,7 @@ void DPApplyToolbar(NSView *pane) {
         if (reachesBottom) frame.size.height += shift;
         if (pane.isFlipped) frame.origin.y -= shift;
         else if (!reachesBottom) frame.origin.y += shift;
+        if (view.class != NSView.class) DPHookClass(view.class, @selector(setFrame:), (IMP)DPStacked_setFrame);
         DPAssignFrame(view, laidOut, frame);
         // Dia sizes the web view once instead of autoresizing it.
         for (NSView *child in view.subviews) {
