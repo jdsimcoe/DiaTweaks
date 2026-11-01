@@ -8,9 +8,23 @@ BOOL DPChatLocked(NSView *view) {
     return DPFindView(view, ^BOOL(NSView *v) { return [v.accessibilityLabel hasSuffix:@"only available when you have chat usage"]; }) != nil;
 }
 
+// Dia labels the buttons a moment after a command bar first shows, so until then it goes by the last one it labeled.
+static NSString *const DPChatLockedKey = @"commandBarChatLocked";
+
+static NSUserDefaults *DPCommandBarDefaults(void) {
+    static NSUserDefaults *defaults;
+    if (!defaults) defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.diapatches"];
+    return defaults;
+}
+
+void DPRememberChatLocked(BOOL locked) {
+    if ([DPCommandBarDefaults() boolForKey:DPChatLockedKey] != locked) [DPCommandBarDefaults() setBool:locked forKey:DPChatLockedKey];
+}
+
 NSView *DPCompactToolbar(NSView *commandBar) {
     NSView *toolbar = commandBar ? DPCommandBarPart(commandBar, DPDiaCommandBarToolbar) : nil;
-    return DPCompactCommandBar.on && toolbar && DPChatLocked(toolbar) ? toolbar : nil;
+    BOOL locked = toolbar && (DPChatLocked(toolbar) || [DPCommandBarDefaults() boolForKey:DPChatLockedKey]);
+    return DPCompactCommandBar.on && locked ? toolbar : nil;
 }
 
 NSView *DPGoButton(NSView *toolbar) {
@@ -42,7 +56,7 @@ DP_PATCH(DPCompactCommandBar) {
     .detail = @"Fit the command bar on one line when adding tabs, files and dictation need chat usage.",
     .symbol = @"rectangle.and.text.magnifyingglass",
     .tint = @"systemCyanColor",
-    .classes = DPClasses(DPDiaPopover, DPDiaCommandBar, DPDiaCommandBarInput, DPDiaCommandBarText, DPDiaCommandBarSuggestions, DPDiaCommandBarToolbar),
+    .classes = DPClasses(DPDiaPopover, DPDiaAssistantPanel, DPDiaNewTabPage, DPDiaCommandBar, DPDiaCommandBarInput, DPDiaCommandBarText, DPDiaCommandBarSuggestions, DPDiaCommandBarToolbar, DPDiaCommandBarButton),
     .install = DPInstallCommandBarLayout,
     .apply = DPApplyCompactCommandBar,
     .verify = DPVerifyCompactCommandBar,
