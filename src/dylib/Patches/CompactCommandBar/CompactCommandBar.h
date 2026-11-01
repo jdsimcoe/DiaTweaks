@@ -6,6 +6,7 @@ extern DPPatch DPCompactCommandBar;
 NSView *DPCommandBarPart(NSView *commandBar, const char *className);
 BOOL DPChatLocked(NSView *view);
 NSView *DPCompactToolbar(NSView *commandBar);  // The bottom row while the patch applies to this command bar, else nil.
+void DPRememberChatLocked(BOOL locked);
 NSView *DPGoButton(NSView *toolbar);
 
 // Layout.m
